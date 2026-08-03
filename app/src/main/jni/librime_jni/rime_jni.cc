@@ -79,6 +79,15 @@ std::vector<std::string> splitUtf8Chars(const std::string& text) {
   return chars;
 }
 
+// 与 userdb 快照条目解析器保持一致：编码后补一个空格，形成规范 key
+// （key ::= code <space> <Tab> phrase），保证本地写入与同步导入命中同一 key。
+std::string normalizeUserPhraseCode(std::string code) {
+  if (code.empty() || code[code.length() - 1] != ' ') {
+    code += ' ';
+  }
+  return code;
+}
+
 bool deleteEncodedPhraseChain(rime::UserDictionary* user_dict,
                               const rime::Ticket& ticket,
                               const std::string& phrase) {
@@ -126,7 +135,7 @@ bool addExplicitEncodedPhrase(rime::UserDictionary* user_dict,
 
   rime::DictEntry entry;
   entry.text = phrase;
-  entry.custom_code = encoder.captured_code();
+  entry.custom_code = normalizeUserPhraseCode(encoder.captured_code());
   bool inserted = user_dict->UpdateEntry(entry, 1);
   if (!inserted) {
     return false;
@@ -303,7 +312,7 @@ class Rime {
 
     rime::DictEntry entry;
     entry.text = std::string(text);
-    entry.custom_code = std::string(code);
+    entry.custom_code = normalizeUserPhraseCode(std::string(code));
     if (!user_dict->UpdateEntry(entry, 1)) {
       return false;
     }
@@ -384,7 +393,7 @@ class Rime {
 
     rime::DictEntry entry;
     entry.text = std::string(text);
-    entry.custom_code = std::string(code);
+    entry.custom_code = normalizeUserPhraseCode(std::string(code));
     if (!user_dict->UpdateEntry(entry, -1)) {
       return false;
     }
