@@ -3484,7 +3484,9 @@ public class TrimeService extends InputMethodService {
         setCandidateViewVisible(true);
         setCandidatesViewShown(true);
         showToolbarView(false);
-        updateCandidate();
+        // 走无条件重新加载的 update() 链路：show() 在高亮索引命中时会提前返回，
+        // 导致删除生效后候选列表仍停留在旧数据
+        filterCandidate();
     }
 
     /**
@@ -4612,6 +4614,7 @@ public class TrimeService extends InputMethodService {
      * 因此需要在 CandidateView/FloatCandidateView 取到非空候选后主动恢复候选区高度。</p>
      */
     public void showCandidateAreaForMenu() {
+        setCandidateViewVisible(true);
         setCandidatesViewShown(true);
         showToolbarView(false);
     }

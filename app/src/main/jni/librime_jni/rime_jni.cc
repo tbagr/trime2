@@ -393,9 +393,36 @@ class Rime {
 
     rime::DictEntry entry;
     entry.text = std::string(text);
-    entry.custom_code = normalizeUserPhraseCode(std::string(code));
-    if (!user_dict->UpdateEntry(entry, -1)) {
-      return false;
+    std::string normalized_code = normalizeUserPhraseCode(std::string(code));
+    bool deleted = false;
+    // 手动造词以无前缀编码写入，直接按登记编码删除
+    entry.custom_code = normalized_code;
+    if (user_dict->UpdateEntry(entry, -1)) {
+      deleted = true;
+    }
+    // 自动学习链以 kEncodedPrefix 前缀写入；编码与登记编码一致时直接删除
+    std::string prefixed_code = normalized_code;
+    rime::UnityTableEncoder::AddPrefix(&prefixed_code);
+    entry.custom_code = prefixed_code;
+    if (user_dict->UpdateEntry(entry, -1)) {
+      deleted = true;
+    }
+    // 编码由编码器生成（与登记编码不一致）时，按“前缀 + 登记编码”查询同文本
+    // 带前缀词条，逐个精确删除，避免候选栏残留已删除词
+    std::string query_prefix = normalized_code;
+    rime::UnityTableEncoder::AddPrefix(&query_prefix);
+    rime::UserDictEntryIterator iter;
+    user_dict->LookupWords(&iter, query_prefix, true, 64, nullptr);
+    for (auto e = iter.Peek(); e; e = iter.Next() ? iter.Peek() : nullptr) {
+      if (!e || e->text.empty() || e->text != entry.text) {
+        continue;
+      }
+      rime::DictEntry target;
+      target.text = e->text;
+      target.custom_code = e->custom_code;
+      if (user_dict->UpdateEntry(target, -1)) {
+        deleted = true;
+      }
     }
     deleteEncodedPhraseChain(user_dict.get(), ticket, entry.text);
 
