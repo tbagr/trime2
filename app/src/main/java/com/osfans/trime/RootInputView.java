@@ -970,6 +970,7 @@ public class RootInputView extends FrameLayout {
         if (!visible && mShowExtractedCandidatesView) {
             showExtractedCandidatesView(false);
         }
+        mCandidateAreaVisible = visible;
         applyCandidateAreaVisibility(visible && !Rime.getRimeOption("_hide_candidate"));
     }
 
@@ -984,7 +985,6 @@ public class RootInputView extends FrameLayout {
      */
     private void applyCandidateAreaVisibility(boolean visible) {
         int oldCandidateHeight = mCandidateAreaVisible ? ThemeManager.getCandidateHeight() : 0;
-        mCandidateAreaVisible = visible;
         int candidateHeight = visible ? ThemeManager.getCandidateHeight() : 0;
         int contentHeight = ThemeManager.getKeyboardHeight() + candidateHeight;
         int rootExtraHeight = ThemeManager.getHeight() - ThemeManager.getContentHeight();

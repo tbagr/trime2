@@ -62,6 +62,7 @@ import com.osfans.trime.core.Rime;
 import com.osfans.trime.core.RimeConfig;
 import com.osfans.trime.core.RimeMessage;
 import com.osfans.trime.core.RimeProto;
+import com.osfans.trime.core.SyncMonitor;
 import com.osfans.trime.dialog.DeployDialog;
 import com.osfans.trime.dialog.OptionsDialog;
 import com.osfans.trime.dialog.SchemaGroupDialog;
@@ -130,6 +131,8 @@ public class TrimeService extends InputMethodService {
     private Rime mRime;
     // 主线程 Handler，用于异步任务调度
     private final Handler mHandler = new Handler();
+    // 词库自动同步监视器（监听其他安装的快照更新）
+    private SyncMonitor mSyncMonitor;
     // Rime 消息处理器，接收来自 Rime 引擎的各种通知
     private final Rime.Consumer<RimeMessage<?>> mMessageHandler = this::handleRimeMessage;
     // 选项对话框引用
@@ -318,6 +321,14 @@ public class TrimeService extends InputMethodService {
                 return true;
             }
         });
+        // 启动词库自动同步监视器：检测到其他安装（手机/电脑）的快照更新时
+        // 自动触发 user_dict_sync
+        mSyncMonitor = new SyncMonitor(this, mRime, mHandler);
+        try {
+            mSyncMonitor.start();
+        } catch (Throwable t) {
+            Log.e("SyncMonitor", "start failed", t);
+        }
     }
 
     /**
@@ -327,6 +338,11 @@ public class TrimeService extends InputMethodService {
     public void onDestroy() {
         // 注销剪贴板监听
         unregisterClipEvents();
+        // 停止词库自动同步监视器
+        if (mSyncMonitor != null) {
+            mSyncMonitor.stop();
+            mSyncMonitor = null;
+        }
         // 移除所有待处理的 Handler 消息
         mHandler.removeCallbacksAndMessages(null);
         sInstance = null;
@@ -1318,9 +1334,9 @@ public class TrimeService extends InputMethodService {
     }
 
     /**
-     * 在当前编码没有任何候选时，生成“添加自造词”动作项。
+     * 候选不足 10 个时，生成追加在候选列表末尾的“添加自造词”动作项。
      *
-     * <p>这里只在候选区真的空白时显示入口，避免与正常候选竞争位置；
+     * <p>候选完全空白或不足 10 个时显示入口，避免与足够的正常候选竞争位置；
      * 点击后会弹窗，让用户把当前编码和目标词语明确写入 user_dict。</p>
      */
     public static CandidateItem getCreateWordActionCandidate(
@@ -1330,7 +1346,7 @@ public class TrimeService extends InputMethodService {
                 || TextUtils.isEmpty(rawInput)
                 || isPredictingStatic()
                 || isCreateWordDialogShowingStatic()
-                || (visibleItems != null && !visibleItems.isEmpty())) {
+                || (visibleItems != null && visibleItems.size() >= 10)) {
             return null;
         }
         return CandidateItem.createWordAction(rawInput, "编码：" + rawInput);
@@ -2714,10 +2730,12 @@ public class TrimeService extends InputMethodService {
                 .setNegativeButton(android.R.string.cancel, null)
                 .setPositiveButton(android.R.string.ok, (unusedDialog, which) -> {
                     if (deleteSelfCreatedWord(rawInput, item, matchedEntries, canDeleteLearnedWord)) {
-                        CustomToast.show(this, "已删除自造词", Toast.LENGTH_SHORT, true);
+                        CustomToast.show(this, "已删词", Toast.LENGTH_SHORT, true);
                         refreshCandidateAfterSelfCreatedWordDeletion();
+                        // 删除成功：立即同步词库（后台线程），同步期间常驻提示，完成后隐藏
+                        syncUserDictAfterMutation("已删词并​同步​，正在​部署");
                     } else {
-                        CustomToast.show(this, "删除自造词失败", Toast.LENGTH_SHORT, true);
+                        CustomToast.show(this, "删词失败", Toast.LENGTH_SHORT, true);
                     }
                 })
                 .create();
@@ -2846,6 +2864,8 @@ public class TrimeService extends InputMethodService {
                 }
                 rememberManualCreatedWord(code, text);
                 CustomToast.show(this, "已造词：" + text, Toast.LENGTH_SHORT, true);
+                // 造词成功：立即同步词库（后台线程），同步期间常驻提示，完成后隐藏
+                syncUserDictAfterMutation("已造词并​同步，正在​​部署");
                 dialog.dismiss();
                 updateCandidate();
             });
@@ -3641,6 +3661,8 @@ public class TrimeService extends InputMethodService {
         }
         if (mRime.encodeUserPhrase(phrase)) {
             CustomToast.show(this, "已造词：" + phrase, Toast.LENGTH_SHORT, true);
+            // 造词成功：立即同步词库（后台线程），同步期间常驻提示，完成后隐藏
+            syncUserDictAfterMutation("已造词并​同步​，正在​部署");
         } else {
             CustomToast.show(this, "造词失败：" + phrase, Toast.LENGTH_SHORT, true);
         }
@@ -3699,6 +3721,46 @@ public class TrimeService extends InputMethodService {
      */
     public boolean syncUserData() {
         return mRime.syncUserData();
+    }
+
+    /**
+     * 造词/删词成功后同步词库并重新部署。
+     *
+     * <p>同步期间在键盘上方常驻显示提示文案；同步（部署）完成后隐藏提示；
+     * 同步失败时提示改为“部署失败，请手动同步”。</p>
+     *
+     * @param successMsg 同步进行中的提示文案（持续显示直至部署完成）。
+     */
+    private void syncUserDictAfterMutation(String successMsg) {
+        CustomToast.showPersistent(this, successMsg, true);
+        Thread thread = new Thread(() -> {
+            boolean ok = false;
+            try {
+                ok = mRime.syncUserDataAndWaitForDeployment();
+            } catch (Throwable t) {
+                Log.e(TAG, "sync after user dict mutation failed", t);
+            }
+            final boolean synced = ok;
+            mHandler.post(() -> {
+                if (synced) {
+                    CustomToast.dismiss();
+                } else {
+                    CustomToast.show(this, "部署失败，请手动同步",
+                            Toast.LENGTH_SHORT, true);
+                }
+            });
+        }, "user-dict-sync");
+        thread.start();
+    }
+
+    /**
+     * 手动同步（键盘“同步”按钮触发）。
+     *
+     * <p>同步并部署期间常驻显示“同步完成，正在部署”；部署完成后提示消失；
+     * 部署失败时提示“部署失败，请手动同步”。</p>
+     */
+    public void syncUserDataWithDeploymentStatus() {
+        syncUserDictAfterMutation("同步完成，正在部署");
     }
 
     public void showStatusDialog(String title) {

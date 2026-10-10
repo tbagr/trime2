@@ -103,7 +103,10 @@ bool deleteEncodedPhraseChain(rime::UserDictionary* user_dict,
     return false;
   }
   std::set<std::string> phrases_to_delete;
-  for (size_t length = 1; length <= chars.size(); ++length) {
+  // 只清理比目标词更短的自动编码子串（单字、前缀垃圾词）；完整短语不在此列，
+  // 否则 DeletePhrase 在 UpdateEntry(-1, kEncodedPrefix) 时因无前缀词条已存在而
+  // 不加前缀，直接把刚写入（或正在删除）的完整短语词条打成墓碑 c=-1
+  for (size_t length = 1; length < chars.size(); ++length) {
     for (size_t start = 0; start + length <= chars.size(); ++start) {
       std::string subphrase;
       for (size_t i = start; i < start + length; ++i) {
@@ -407,6 +410,24 @@ class Rime {
     if (user_dict->UpdateEntry(entry, -1)) {
       deleted = true;
     }
+    // 编码由编码器生成（与登记编码不一致）或历史版本未带尾随空格时，按
+    // “登记编码前缀 + 文本”回查无前缀编码下实际保存的词条，按其真实编码逐个
+    // 精确删除，避免第一次删除只写幽灵墓碑而词条仍在候选栏中残留
+    std::string plain_prefix = normalized_code;
+    boost::algorithm::trim_right(plain_prefix);
+    rime::UserDictEntryIterator plain_iter;
+    user_dict->LookupWords(&plain_iter, plain_prefix, true, 64, nullptr);
+    for (auto e = plain_iter.Peek(); e; e = plain_iter.Next() ? plain_iter.Peek() : nullptr) {
+      if (!e || e->text.empty() || e->text != entry.text) {
+        continue;
+      }
+      rime::DictEntry target;
+      target.text = e->text;
+      target.custom_code = e->custom_code;
+      if (user_dict->UpdateEntry(target, -1)) {
+        deleted = true;
+      }
+    }
     // 编码由编码器生成（与登记编码不一致）时，按“前缀 + 登记编码”查询同文本
     // 带前缀词条，逐个精确删除，避免候选栏残留已删除词
     std::string query_prefix = normalized_code;
@@ -430,7 +451,7 @@ class Rime {
     if (current_session && current_session->context()) {
       current_session->context()->RefreshNonConfirmedComposition();
     }
-    return true;
+    return deleted;
   }
 
   std::vector<std::string> queryRawInputCompletions(std::string_view prefix,
@@ -674,6 +695,8 @@ class Rime {
     return rime->sync_user_data();
   }
 
+  bool isMaintenanceMode() { return rime && rime->is_maintenance_mode(); }
+
  private:
   RimeApi *rime;
   std::shared_ptr<SessionHolder> session_;
@@ -759,6 +782,12 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_osfans_trime_core_Rime_syncRimeUserData(JNIEnv *env,
                                                  jclass /* thiz */) {
   return Rime::Instance().sync();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_osfans_trime_core_Rime_isRimeMaintenance(JNIEnv *env,
+                                                  jclass /* thiz */) {
+  return Rime::Instance().isMaintenanceMode();
 }
 
 // input
