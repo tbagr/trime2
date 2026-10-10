@@ -69,10 +69,10 @@ rows = {
             { width = 1 },
             { click = "Keyboard_symbols", width = 13.7, long_click = "Mode_switch", swipe_up = "Keyboard_menu", swipe_right = "Schema_settings", style = "key_symbols" },
             { click = "Keyboard_number", swipe_up = "Keyboard_default_zhuji", swipe_left = "Theme_settings", swipe_right = "Color_switch", composing = "Select_five", style = "key_numbers" },
-            { click = "<", long_click = ",", composing = "Select_four" },
+            { click = ",", swipe_up = "<", composing = "Select_four" },
             { click = "space", width = 30.2751, long_click="VOICE_ASSIST", swipe_left = "Left", swipe_right = "Right", swipe_up = "Up", swipe_down = "Down", style = "key_space" },
-            { click = ">", long_click = ".", composing = "Select_two" },
-            { click = "/", long_click = "?" , composing = "Select_three" },
+            { click = ".", swipe_up = ">", composing = "Select_two" },
+            { click = "?", swipe_up = "/" , composing = "Select_three" },
             { click = "Return", width = 13.7, label = "Enter", style = "key_enter" },
             { width = 1 },
         }
