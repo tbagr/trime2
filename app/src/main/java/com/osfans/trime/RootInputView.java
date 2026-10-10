@@ -1101,23 +1101,6 @@ public class RootInputView extends FrameLayout {
     }
 
     /**
-     * 为删后重预测清空当前候选内容，但保留候选区位置。
-     *
-     * <p>这个场景下旧候选已经过期，不应继续显示；但如果立刻切到工具栏，等新的联想候选回来时
-     * 又会整栏跳回候选区，视觉上会有明显割裂感。这里仅清空当前候选数据，并保持候选区仍在，
-     * 让后续新候选可以直接顶上来。</p>
-     */
-    public void clearCandidatesForPredictionRefresh() {
-        mHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                mCandidateView.setData(new ArrayList<>());
-                showToolbarView(false);
-            }
-        });
-    }
-
-    /**
      * 设置小屏模式状态。
      *
      * @param value true 启用小屏模式，false 禁用。
