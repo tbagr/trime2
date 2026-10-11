@@ -427,7 +427,6 @@ key_backspace = table.merge(key, {
     margins = { left = 0, top = 0, right = 0, bottom = 0 },
     hint = { show = false },
     repeat_click_time = 50,
-    sound_enabled = true,
     sound_effect = "del.ogg",
     pressed = table.merge(key.pressed, {
         text_color = 0xff,
@@ -460,7 +459,6 @@ key_space = table.merge(key, {
     text_size = 14,
     hint = { show = false },
     long_click_time = 300,
-    sound_enabled = true,
     sound_effect = "space.ogg",
     swipe_repeatable = true,
     repeat_click_time = 100,
@@ -471,7 +469,6 @@ key_enter = table.merge(key, {
     text_size = 14,
     background = 0xff3C5AB0,
     text_color = 0xffFFFFFF,
-    sound_enabled = true,
     sound_effect = "enter.ogg",
     pressed = table.merge(key.pressed, {
         text_color = 0xffFFFFFF,

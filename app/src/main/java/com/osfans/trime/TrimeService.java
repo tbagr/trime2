@@ -105,7 +105,9 @@ public class TrimeService extends InputMethodService {
     private static final String RAW_INPUT_CANDIDATE_OPTION = "show_raw_input_candidate";
     private static final String CREATE_WORD_CANDIDATE_LABEL = "添加自造词";
     private static final String CREATE_WORD_MODE_OPTION = "_create_word_mode";
+    private static final String HIDE_KEY_SOUND_OPTION = "_hide_key_sound";
     private static final String MANUAL_CREATED_WORDS_PREF_KEY = "manual_created_words";
+    private static final String AUTO_CREATED_WORDS_PREF_KEY = "auto_created_words";
     private static final String AGGRESSIVE_AUTO_PHRASE_OPTION = "aggressive_auto_phrase";
     private static final int RAW_INPUT_COMPLETION_LIMIT = 8;
     // ==================== 常量与静态变量 ====================
@@ -164,6 +166,8 @@ public class TrimeService extends InputMethodService {
     // 虎码“造词开”会话期间先缓存连续上屏文本，关闭时再一次性编码入 user_dict。
     private final StringBuilder mAggressiveAutoPhraseBuffer = new StringBuilder();
     private boolean mIsAggressiveAutoPhraseRecording = false;
+    // 本次 Rime 会话是否已把「无音效」默认值写入引擎（用户手动切换后不再覆盖）
+    private boolean mKeySoundDefaultApplied = false;
     // 是否需要发送键释放事件
     private boolean keyUpNeeded;
     // 点击 composition 后待在下一次按键前同步到 Rime 的光标位。
@@ -347,10 +351,48 @@ public class TrimeService extends InputMethodService {
         showCustomView(null);
         String soft_cursor_key = "soft_cursor";
         Rime.setRimeOption(soft_cursor_key, true); // 软光标
+        // 本次会话尚未写入按键音效默认值时才设置，避免覆盖用户手动切换的结果
+        if (!mKeySoundDefaultApplied && applyDefaultKeySoundDisabled()) {
+            mKeySoundDefaultApplied = true;
+        }
         // 调用 Lua 脚本的 onWindowShown 钩子
         ThemeManager.callFunction("onWindowShown");
         // 初始化语音输入模块
         mSpeech = new Speech(this);
+    }
+
+    /**
+     * 按键音效默认关闭：把 Rime 选项 {@code _hide_key_sound} 置为无音效。
+     *
+     * <p>该选项不在 librime 的 {@code save_options} 中，不会跨会话持久化，因此每次
+     * 方案加载/切换/部署完成后都要重新置位；用户仍可通过 menu 键盘的
+     * 「有音效/无音效」开关在本次会话内切换。</p>
+     */
+    private boolean applyDefaultKeySoundDisabled() {
+        if (mRime == null || !mRime.isReady()) {
+            return false;
+        }
+        Rime.setRimeOption(HIDE_KEY_SOUND_OPTION, true);
+        return true;
+    }
+
+    /**
+     * 把「按键音效默认关闭」延迟到通知回调栈退出后再写入。
+     *
+     * <p>Rime 的方案切换/部署通知是在 native 引擎持锁状态下同步回调到
+     * {@link #handleRimeMessage} 的。此时若直接调用 {@link Rime#setRimeOption}，
+     * 会在锁内重入通知信号并再次加锁同一把非递归互斥量，导致主线程自死锁
+     * （键盘无响应）。因此统一 post 到主消息队列，等 native 调用返回、锁释放后再设置。</p>
+     */
+    private void scheduleDefaultKeySoundDisabled() {
+        mHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (!mKeySoundDefaultApplied && applyDefaultKeySoundDisabled()) {
+                    mKeySoundDefaultApplied = true;
+                }
+            }
+        });
     }
 
     /**
@@ -1771,6 +1813,7 @@ public class TrimeService extends InputMethodService {
             // 获取新方案的 ID，并通知根视图更新键盘布局和状态显示
             initInlinePreedit();
             mRootInputView.setSchema(schemaMessage.getData().getId());
+            scheduleDefaultKeySoundDisabled();
             updateComposing(mRime.getCompositionCached());
         }
         // 3. 处理部署（同步/编译配置）完成消息
@@ -1798,6 +1841,7 @@ public class TrimeService extends InputMethodService {
                             // 获取到方案 ID 后，更新根视图的键盘布局
                             initInlinePreedit();
                             mRootInputView.setSchema(Rime.getCurrentRimeSchema());
+                            scheduleDefaultKeySoundDisabled();
                             updateComposing(mRime.getCompositionCached());
                         }
                     }
@@ -2901,17 +2945,20 @@ public class TrimeService extends InputMethodService {
     }
 
     /**
-     * 只给“手动造词登记表”中的候选补小太极，避免把普通自动学习词一并标成自造词。
+     * 只给“手动造词”与“自动造词”的候选补小太极，避免把词库已有词、普通上屏学习的单字
+     * 一并标成自造词。
      */
     private CandidateItem decorateVisibleCandidateItem(String rawInput, CandidateItem item) {
         if (item == null || item.isCreateWordAction()) {
             return item;
         }
-        // 保留 native 已识别出的 user_phrase/user_table 自造词标记；
-        // 同时为“手动造词登记表”命中的前缀候选，以及造词开关写入 user_dict 的前缀候选补小太极。
-        boolean shouldMarkSelfCreated = item.isSelfCreated()
-                || isRememberedManualCreatedWord(rawInput, item)
-                || isAutoCreatedWordPrefix(rawInput, item);
+        // 小太极只表示“手动造词”与“自动造词”，因此只认两张登记表：
+        //   1. 手动造词弹窗显式保存的词；
+        //   2. 造词开关（aggressive_auto_phrase）结束会话时显式编码写入的词。
+        // 不采信 native 的 user_phrase/user_table 标记，也不用 user_dict 反查前缀：
+        // 词库已有词、普通上屏学习词都会进入 user_dict，被它们命中会误加小太极。
+        boolean shouldMarkSelfCreated = isRememberedManualCreatedWord(rawInput, item)
+                || isRememberedAutoCreatedWord(item);
         if (item.isSelfCreated() == shouldMarkSelfCreated) {
             return item;
         }
@@ -2929,6 +2976,22 @@ public class TrimeService extends InputMethodService {
         LinkedHashSet<String> mutableEntries = new LinkedHashSet<>(storedEntries);
         mutableEntries.add(buildManualCreatedWordKey(getCurrentSchemaIdSafe(), code, text));
         preferences.edit().putStringSet(MANUAL_CREATED_WORDS_PREF_KEY, mutableEntries).apply();
+    }
+
+    /**
+     * 记录一条造词开关（aggressive_auto_phrase）显式编码写入的词条，
+     * 供候选区后续精确补小太极标识。编码留空，仅按“方案 + 词语”匹配。
+     */
+    private void rememberAutoCreatedWord(String text) {
+        String normalizedText = stripPredictionPlaceholder(text).trim();
+        if (TextUtils.isEmpty(normalizedText)) {
+            return;
+        }
+        SharedPreferences preferences = Function.getPref(this);
+        Set<String> storedEntries = preferences.getStringSet(AUTO_CREATED_WORDS_PREF_KEY, Collections.emptySet());
+        LinkedHashSet<String> mutableEntries = new LinkedHashSet<>(storedEntries);
+        mutableEntries.add(buildManualCreatedWordKey(getCurrentSchemaIdSafe(), "", normalizedText));
+        preferences.edit().putStringSet(AUTO_CREATED_WORDS_PREF_KEY, mutableEntries).apply();
     }
 
     /**
@@ -2976,18 +3039,34 @@ public class TrimeService extends InputMethodService {
     }
 
     /**
-     * 判断当前候选是否命中了 user_dict 中的自动造词前缀记录。
+     * 判断当前候选是否命中了“自动造词登记表”。
+     *
+     * <p>自动造词由造词开关（aggressive_auto_phrase）结束会话时写入 user_dict，
+     * 并在 {@link #rememberAutoCreatedWord} 中登记词条，供候选区精确补小太极。</p>
      */
-    private boolean isAutoCreatedWordPrefix(String rawInput, CandidateItem item) {
-        if (mRime == null || item == null || item.isSelfCreated()) {
+    private boolean isRememberedAutoCreatedWord(CandidateItem item) {
+        if (item == null) {
             return false;
         }
-        String code = stripPredictionPlaceholder(rawInput).trim();
         String text = stripPredictionPlaceholder(item.getText()).trim();
-        if (TextUtils.isEmpty(code) || TextUtils.isEmpty(text)) {
+        if (TextUtils.isEmpty(text)) {
             return false;
         }
-        return mRime.hasUserPhraseWithPrefix(code, text);
+        String currentSchemaId = getCurrentSchemaIdSafe();
+        Set<String> storedEntries = Function.getPref(this).getStringSet(
+                AUTO_CREATED_WORDS_PREF_KEY,
+                Collections.emptySet());
+        for (String entry : storedEntries) {
+            String[] parts = splitManualCreatedWordKey(entry);
+            if (parts == null || parts.length != 3) {
+                continue;
+            }
+            if (TextUtils.equals(currentSchemaId, parts[0])
+                    && TextUtils.equals(text, parts[2])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -3184,7 +3263,7 @@ public class TrimeService extends InputMethodService {
             mAggressiveAutoPhraseBuffer.setLength(0);
             return;
         }
-        flushAggressiveAutoPhraseRecording();
+        scheduleAggressiveAutoPhraseFlush();
     }
 
     /**
@@ -3236,16 +3315,35 @@ public class TrimeService extends InputMethodService {
     }
 
     /**
-     * 结束“造词开”会话，并把本轮累计的词语一次性编码进 user_dict。
+     * 结束“造词开”会话：先同步取出待编码词语并复位录制状态，再延迟编码。
+     *
+     * <p>本方法由 {@link #handleRimeMessage} 的选项变更通知触发，此时 native
+     * 引擎仍持锁。若直接调用 {@link Rime#encodeUserPhrase} 会重入引擎通知并再次
+     * 加锁同一把非递归互斥量，导致主线程自死锁（键盘无响应）。因此这里只在通知
+     * 回调内同步完成状态复位，编码与同步动作 post 到主消息队列。</p>
      */
-    private void flushAggressiveAutoPhraseRecording() {
-        String phrase = mAggressiveAutoPhraseBuffer.toString();
+    private void scheduleAggressiveAutoPhraseFlush() {
+        final String phrase = mAggressiveAutoPhraseBuffer.toString();
         mIsAggressiveAutoPhraseRecording = false;
         mAggressiveAutoPhraseBuffer.setLength(0);
         if (!isTigressSchema() || phrase.length() <= 1) {
             return;
         }
+        mHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                encodeAggressiveAutoPhrase(phrase);
+            }
+        });
+    }
+
+    /**
+     * 把本轮累计的词语一次性编码进 user_dict。已在主消息队列上执行，
+     * 不在 native 通知回调栈内，可安全调用引擎。
+     */
+    private void encodeAggressiveAutoPhrase(String phrase) {
         if (mRime.encodeUserPhrase(phrase)) {
+            rememberAutoCreatedWord(phrase);
             CustomToast.show(this, "已造词：" + phrase, Toast.LENGTH_SHORT, true);
             // 造词成功：立即同步词库（后台线程），同步期间常驻提示，完成后隐藏
             syncUserDictAfterMutation("已造词并​同步​，正在​部署");
