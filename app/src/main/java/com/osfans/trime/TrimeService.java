@@ -1120,8 +1120,9 @@ public class TrimeService extends InputMethodService {
     /**
      * 当前编码中的数字按键是否应继续并入 Rime composition。
      *
-     * <p>只有方案的 `speller/alphabet` 明确接受数字时，才把数字当成编码继续送给 Rime；
-     * 否则仍按候选序号处理，避免在 `pinyin_simp` 这类纯字母拼写方案里把 `tb6` 误扩展成混合编码链。</p>
+     * <p>只有当方案接受数字编码时（虎码 tiger/tigress，或 `speller/alphabet` 明确包含数字），
+     * 才把数字当成编码继续送给 Rime；否则仍按候选序号处理，避免在 `pinyin_simp` 这类纯字母
+     * 拼写方案里把 `tb6` 误扩展成混合编码链。</p>
      */
     private boolean shouldAppendDigitToComposition() {
         if (!isComposing()) {
@@ -2007,8 +2008,8 @@ public class TrimeService extends InputMethodService {
         String schemaId = Rime.getCurrentRimeSchema();
         if (!TextUtils.isEmpty(schemaId)) {
             try (RimeConfig config = RimeConfig.openSchema(schemaId)) {
-                mSchemaAcceptsDigitInSpeller = schemaAlphabetAcceptsDigit(
-                        config.getString("speller/alphabet"));
+                mSchemaAcceptsDigitInSpeller = schemaAcceptsInlineDigit(
+                        schemaId, config.getString("speller/alphabet"));
                 Boolean inlinePreeditEnabled = config.getBool("style/inline_preedit");
                 if (!Boolean.FALSE.equals(inlinePreeditEnabled)) {
                     String preeditType = config.getString("style/preedit_type");
@@ -2037,6 +2038,21 @@ public class TrimeService extends InputMethodService {
         if (mRootInputView != null) {
             mRootInputView.setInlinePreeditMode(inlinePreedit);
         }
+    }
+
+    /**
+     * 当前方案是否允许把编码中的数字继续并入 Rime composition。
+     *
+     * <p>虎码（tiger/tigress）在原生 speller 中已对数字后缀做特殊处理，即使
+     * `speller/alphabet` 不含数字也会把数字并入编码；其余方案仍以 alphabet 是否
+     * 显式包含数字为准，避免在 `pinyin_simp` 这类纯字母拼写方案里把 `tb6` 误扩展
+     * 成混合编码链。</p>
+     */
+    private static boolean schemaAcceptsInlineDigit(String schemaId, String alphabet) {
+        if ("tiger".equals(schemaId) || "tigress".equals(schemaId)) {
+            return true;
+        }
+        return schemaAlphabetAcceptsDigit(alphabet);
     }
 
     /**
