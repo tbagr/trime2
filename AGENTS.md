@@ -1,6 +1,7 @@
 # Trime — 同文输入法
 
-本仓库所有对话使用中文交流。
+- 始终用简体中文回复；代码、命令、变量名、文件路径保持英文原样。
+- 规约驱动（spec-driven）开发：动代码前先读 `openspec/changes/` 下各变更的 `tasks.md`（可能不止一个变更同时在推进，以 `[ ]` 未完成项为准），用 `.opencode/skills/openspec-*` 中的 skill 驱动 propose → apply → verify → archive。
 
 Rime IME for Android。Java/Kotlin + C++ (JNI) 混合项目，基于 librime。
 
