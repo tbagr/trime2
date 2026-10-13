@@ -556,7 +556,7 @@ public class RootInputView extends FrameLayout {
         // 根据 Rime 选项决定是否隐藏按键提示和候选词注释
         Config.set_hide_comment(Rime.getRimeOption("_hide_comment"));
         Config.set_hide_key_hint(Rime.getRimeOption("_hide_key_hint"));
-        Config.set_hide_key_sound(Rime.getRimeOption("_hide_key_sound"));
+        // 按键音效由 TrimeService 按持久化开关维护，此处不覆盖，避免 native 重置后音效恢复
 
     }
 
@@ -915,7 +915,7 @@ public class RootInputView extends FrameLayout {
         boolean hideCommentChanged = Config.is_hide_comment() != Rime.getRimeOption("_hide_comment");
         Config.set_hide_comment(Rime.getRimeOption("_hide_comment"));
         Config.set_hide_key_hint(Rime.getRimeOption("_hide_key_hint"));
-        Config.set_hide_key_sound(Rime.getRimeOption("_hide_key_sound"));
+        // 按键音效由 TrimeService 按持久化开关维护，此处不覆盖，避免 native 重置后音效恢复
         if (mInputView != null) mInputView.invalidateAllKeys();
         if (mCandidateView != null){
             applyCandidateAreaVisibility(mCandidateAreaVisible && !Rime.getRimeOption("_hide_candidate"));

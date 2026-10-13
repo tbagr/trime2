@@ -106,6 +106,9 @@ public class TrimeService extends InputMethodService {
     private static final String CREATE_WORD_CANDIDATE_LABEL = "添加自造词";
     private static final String CREATE_WORD_MODE_OPTION = "_create_word_mode";
     private static final String HIDE_KEY_SOUND_OPTION = "_hide_key_sound";
+    // 按键音效的持久化开关：默认 true（无音效）。该值只由 menu 的「有音效/无音效」按钮改写，
+    // 方案切换/部署导致 native 选项被重置时，用它恢复，避免音效被意外打开。
+    private static final String KEY_SOUND_HIDE_PREF_KEY = "key_sound_hide";
     private static final String MANUAL_CREATED_WORDS_PREF_KEY = "manual_created_words";
     private static final String AUTO_CREATED_WORDS_PREF_KEY = "auto_created_words";
     private static final String AGGRESSIVE_AUTO_PHRASE_OPTION = "aggressive_auto_phrase";
@@ -166,8 +169,6 @@ public class TrimeService extends InputMethodService {
     // 虎码“造词开”会话期间先缓存连续上屏文本，关闭时再一次性编码入 user_dict。
     private final StringBuilder mAggressiveAutoPhraseBuffer = new StringBuilder();
     private boolean mIsAggressiveAutoPhraseRecording = false;
-    // 本次 Rime 会话是否已把「无音效」默认值写入引擎（用户手动切换后不再覆盖）
-    private boolean mKeySoundDefaultApplied = false;
     // 是否需要发送键释放事件
     private boolean keyUpNeeded;
     // 点击 composition 后待在下一次按键前同步到 Rime 的光标位。
@@ -351,10 +352,8 @@ public class TrimeService extends InputMethodService {
         showCustomView(null);
         String soft_cursor_key = "soft_cursor";
         Rime.setRimeOption(soft_cursor_key, true); // 软光标
-        // 本次会话尚未写入按键音效默认值时才设置，避免覆盖用户手动切换的结果
-        if (!mKeySoundDefaultApplied && applyDefaultKeySoundDisabled()) {
-            mKeySoundDefaultApplied = true;
-        }
+        // 恢复持久化的按键音效状态（该选项不在 native 的 save_options 中，不会自动持久化）
+        applyStoredKeySoundOption();
         // 调用 Lua 脚本的 onWindowShown 钩子
         ThemeManager.callFunction("onWindowShown");
         // 初始化语音输入模块
@@ -362,35 +361,49 @@ public class TrimeService extends InputMethodService {
     }
 
     /**
-     * 按键音效默认关闭：把 Rime 选项 {@code _hide_key_sound} 置为无音效。
-     *
-     * <p>该选项不在 librime 的 {@code save_options} 中，不会跨会话持久化，因此每次
-     * 方案加载/切换/部署完成后都要重新置位；用户仍可通过 menu 键盘的
-     * 「有音效/无音效」开关在本次会话内切换。</p>
+     * 读取持久化的按键音效开关（默认 true，即无音效）。
      */
-    private boolean applyDefaultKeySoundDisabled() {
-        if (mRime == null || !mRime.isReady()) {
-            return false;
-        }
-        Rime.setRimeOption(HIDE_KEY_SOUND_OPTION, true);
-        return true;
+    private boolean getStoredHideKeySound() {
+        return Function.getPref(this).getBoolean(KEY_SOUND_HIDE_PREF_KEY, true);
     }
 
     /**
-     * 把「按键音效默认关闭」延迟到通知回调栈退出后再写入。
+     * 写入按键音效开关。仅由 menu 的「有音效/无音效」按钮调用。
+     */
+    private void persistHideKeySound(boolean hide) {
+        Function.getPref(this).edit().putBoolean(KEY_SOUND_HIDE_PREF_KEY, hide).apply();
+    }
+
+    /**
+     * 按持久化的按键音效开关，同步内存标记 {@link Config#set_hide_key_sound} 与引擎选项
+     * {@code _hide_key_sound}。
+     *
+     * <p>内存标记是按键是否播音的权威来源，必须始终按持久化值设置；引擎选项只用于 menu
+     * 按钮「有音效/无音效」的状态显示，native 会在方案切换/部署后把它重置为默认值（有音效），
+     * 因此需要一并恢复，确保部署、切方案都不会改变音效状态。</p>
+     */
+    private void applyStoredKeySoundOption() {
+        boolean hide = getStoredHideKeySound();
+        // 内存标记优先设置，即使引擎尚未就绪也不会误播音效
+        Config.set_hide_key_sound(hide);
+        if (mRime != null && mRime.isReady()) {
+            Rime.setRimeOption(HIDE_KEY_SOUND_OPTION, hide);
+        }
+    }
+
+    /**
+     * 把按键音效状态的恢复延迟到通知回调栈退出后再写入。
      *
      * <p>Rime 的方案切换/部署通知是在 native 引擎持锁状态下同步回调到
      * {@link #handleRimeMessage} 的。此时若直接调用 {@link Rime#setRimeOption}，
      * 会在锁内重入通知信号并再次加锁同一把非递归互斥量，导致主线程自死锁
      * （键盘无响应）。因此统一 post 到主消息队列，等 native 调用返回、锁释放后再设置。</p>
      */
-    private void scheduleDefaultKeySoundDisabled() {
+    private void scheduleStoredKeySoundApply() {
         mHandler.post(new Runnable() {
             @Override
             public void run() {
-                if (!mKeySoundDefaultApplied && applyDefaultKeySoundDisabled()) {
-                    mKeySoundDefaultApplied = true;
-                }
+                applyStoredKeySoundOption();
             }
         });
     }
@@ -864,7 +877,17 @@ public class TrimeService extends InputMethodService {
                     // 先提交当前已输入的文本
                     commitText();
                     // 切换 Rime 运行时选项（如 ascii_mode）
-                    mRime.toggleRuntimeOption(event.getToggle());
+                    String toggleOption = event.getToggle();
+                    if (HIDE_KEY_SOUND_OPTION.equals(toggleOption)) {
+                        // 按键音效只由 menu 的「有音效/无音效」按钮控制：翻转并持久化，
+                        // 同时更新内存标记与引擎选项，供部署/切方案后恢复。
+                        boolean hide = !Config.is_key_sound();
+                        Config.set_hide_key_sound(hide);
+                        persistHideKeySound(hide);
+                        mRime.setRuntimeOption(HIDE_KEY_SOUND_OPTION, hide);
+                    } else {
+                        mRime.toggleRuntimeOption(toggleOption);
+                    }
                     break;
 
                 // --- 英数键 (Eisu) ---
@@ -1814,7 +1837,7 @@ public class TrimeService extends InputMethodService {
             // 获取新方案的 ID，并通知根视图更新键盘布局和状态显示
             initInlinePreedit();
             mRootInputView.setSchema(schemaMessage.getData().getId());
-            scheduleDefaultKeySoundDisabled();
+            scheduleStoredKeySoundApply();
             updateComposing(mRime.getCompositionCached());
         }
         // 3. 处理部署（同步/编译配置）完成消息
@@ -1842,7 +1865,7 @@ public class TrimeService extends InputMethodService {
                             // 获取到方案 ID 后，更新根视图的键盘布局
                             initInlinePreedit();
                             mRootInputView.setSchema(Rime.getCurrentRimeSchema());
-                            scheduleDefaultKeySoundDisabled();
+                            scheduleStoredKeySoundApply();
                             updateComposing(mRime.getCompositionCached());
                         }
                     }

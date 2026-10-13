@@ -1758,7 +1758,7 @@ public class KeyView extends FrameLayout implements View.OnClickListener {
                 }
             }
             // 检查长按样式配置中是否启用了声音反馈
-            if (mKeyStyle.getLongClickKeyStyle().isSoundEnabled() && !Rime.getRimeOption("_hide_key_sound")) {
+            if (mKeyStyle.getLongClickKeyStyle().isSoundEnabled() && !Config.is_key_sound()) {
                 // 按律动模式播放长按音效
                 playKeySound(mKeyStyle.getLongClickKeyStyle());
             }
@@ -1864,7 +1864,7 @@ public class KeyView extends FrameLayout implements View.OnClickListener {
             }
 
             // 2. 处理声音反馈
-            if (mKeyStyle.getLongClickKeyStyle().isSoundEnabled() && !Rime.getRimeOption("_hide_key_sound")) {
+            if (mKeyStyle.getLongClickKeyStyle().isSoundEnabled() && !Config.is_key_sound()) {
                 // 按律动模式播放长按音效
                 playKeySound(mKeyStyle.getLongClickKeyStyle());
             }
@@ -1909,7 +1909,7 @@ public class KeyView extends FrameLayout implements View.OnClickListener {
             }
 
             // 处理声音反馈
-            if (mKeyStyle.getLongClickKeyStyle().isSoundEnabled() && !Rime.getRimeOption("_hide_key_sound")) {
+            if (mKeyStyle.getLongClickKeyStyle().isSoundEnabled() && !Config.is_key_sound()) {
                 // 按律动模式播放长按音效
                 playKeySound(mKeyStyle.getLongClickKeyStyle());
             }
@@ -1999,7 +1999,7 @@ public class KeyView extends FrameLayout implements View.OnClickListener {
                 }
             }
             // 检查是否启用声音反馈
-            if (mKeyStyle.isSoundEnabled() && !Rime.getRimeOption("_hide_key_sound")) {
+            if (mKeyStyle.isSoundEnabled() && !Config.is_key_sound()) {
                 // 按律动模式播放按键音效
                 playKeySound(mKeyStyle);
             }

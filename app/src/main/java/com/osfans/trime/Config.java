@@ -486,8 +486,10 @@ public class Config {
         return _hide_key_hint; // 返回标记值
     }
 
-    // 是否关闭按键音效的标记（true=静音，false=播放）
-    private static boolean _hide_key_sound;
+    // 是否关闭按键音效的标记（true=静音，false=播放）。
+    // 默认静音；该值由 TrimeService 按持久化开关统一维护，只受 menu 的音效按钮控制，
+    // 方案切换/部署不会改动它，避免 native 选项被重置后音效意外恢复。
+    private static boolean _hide_key_sound = true;
     // 设置按键音效开关
     public static void set_hide_key_sound(boolean b) {
         _hide_key_sound = b; // 更新内存中的标记
