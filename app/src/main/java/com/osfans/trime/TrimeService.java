@@ -85,8 +85,10 @@ import java.io.FileNotFoundException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -144,6 +146,8 @@ public class TrimeService extends InputMethodService {
     private boolean mSchemaAcceptsDigitInSpeller = false;
     // 当候选栏首位是 Java 补出来的 mixed 临时候选时，记录其文本，供空格/回车优先上屏。
     private String mPreferredRawInputCandidate = "";
+    // 缓存「候选词是否在基础词库中」的 native 反查结果，key 为「方案 + 词」。
+    private final Map<String, Boolean> mBaseDictionaryWordCache = new HashMap<>();
     private enum CreateWordFocusField {
         CODE,
         TEXT,
@@ -2984,26 +2988,57 @@ public class TrimeService extends InputMethodService {
     }
 
     /**
-     * 只给“手动造词”与“自动造词”的候选补小太极，避免把词库已有词、普通上屏学习的单字
-     * 一并标成自造词。
+     * 给“用户自造词”候选补小太极，且排除基础词库已有词。
+     *
+     * <p>判定分两步：</p>
+     * <ol>
+     *   <li>来源必须是用户词典：native 的 user_phrase/user_table 标记，命中手动/自动造词
+     *       登记表，或 Java 补出的 learned mixed completion。</li>
+     *   <li>该词不能存在于基础词库（tigress/tigress_ci 等 primary table），否则属于学习到的
+     *       词库词，不应标成自造词。</li>
+     * </ol>
+     *
+     * <p>这样手机本地造词与电脑同步造词都能显示小太极，而基础词库词即使被学习进 user_dict
+     * 也不会误标。</p>
      */
     private CandidateItem decorateVisibleCandidateItem(String rawInput, CandidateItem item) {
         if (item == null || item.isCreateWordAction()) {
             return item;
         }
-        // 小太极只表示“手动造词”与“自动造词”，因此只认两张登记表：
-        //   1. 手动造词弹窗显式保存的词；
-        //   2. 造词开关（aggressive_auto_phrase）结束会话时显式编码写入的词。
-        // 不采信 native 的 user_phrase/user_table 标记，也不用 user_dict 反查前缀：
-        // 词库已有词、普通上屏学习词都会进入 user_dict，被它们命中会误加小太极。
-        boolean shouldMarkSelfCreated = isRememberedManualCreatedWord(rawInput, item)
+        boolean fromUserDictionary = item.isSelfCreated()
+                || isRememberedManualCreatedWord(rawInput, item)
                 || isRememberedAutoCreatedWord(item);
+        boolean shouldMarkSelfCreated = fromUserDictionary
+                && !isBaseDictionaryWordCached(stripPredictionPlaceholder(item.getText()));
         if (item.isSelfCreated() == shouldMarkSelfCreated) {
             return item;
         }
         CandidateItem decorated = new CandidateItem(item.getText(), item.getRawComment(), shouldMarkSelfCreated);
         decorated.setIndex(item.getIndex());
         return decorated;
+    }
+
+    /**
+     * 带缓存地判断某词是否来自当前方案的基础词库。
+     *
+     * <p>native 反查需要按方案解析 schema 并读取 reverse db，因此按“方案 + 词”缓存结果，
+     * 避免每次渲染候选时重复调用。</p>
+     */
+    private boolean isBaseDictionaryWordCached(String text) {
+        if (TextUtils.isEmpty(text) || mRime == null) {
+            return false;
+        }
+        String key = getCurrentSchemaIdSafe() + '\0' + text;
+        Boolean cached = mBaseDictionaryWordCache.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        boolean inBaseDictionary = mRime.isBaseDictionaryWord(text);
+        if (mBaseDictionaryWordCache.size() > 4096) {
+            mBaseDictionaryWordCache.clear();
+        }
+        mBaseDictionaryWordCache.put(key, inBaseDictionary);
+        return inBaseDictionary;
     }
 
     /**

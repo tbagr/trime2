@@ -13,6 +13,7 @@
 #include <utf8.h>
 
 #include <rime/dict/dictionary.h>
+#include <rime/dict/reverse_lookup_dictionary.h>
 #include <rime/dict/user_dictionary.h>
 #include <rime/candidate.h>
 #include <rime/context.h>
@@ -568,6 +569,42 @@ class Rime {
   }
 
   /**
+   * 判断某词是否存在于当前方案的基础词库（primary table）。
+   *
+   * <p>借助 dict 编译期生成的 reverse db（词 -> 编码）做反向查询：命中即说明该词
+   * 来自基础词库，而非用户自造词。用于区分“基础词库已有词”与“用户造词”。</p>
+   */
+  bool isBaseDictionaryWord(std::string_view text) {
+    if (text.empty()) {
+      return false;
+    }
+    std::string schema_id = currentSchemaId();
+    if (schema_id.empty() || schema_id == ".default") {
+      return false;
+    }
+    rime::Schema schema(schema_id);
+    if (!schema.config()) {
+      return false;
+    }
+    rime::Ticket ticket(&schema, "translator");
+    auto component =
+        rime::ReverseLookupDictionary::Require("reverse_lookup_dictionary");
+    if (!component) {
+      return false;
+    }
+    std::unique_ptr<rime::ReverseLookupDictionary> rev_dict(
+        component->Create(ticket));
+    if (!rev_dict || !rev_dict->Load()) {
+      return false;
+    }
+    std::string code;
+    if (rev_dict->ReverseLookup(std::string(text), &code)) {
+      return !code.empty();
+    }
+    return false;
+  }
+
+  /**
    * 按输入前缀和词语回查当前方案 user_dict 中保存的完整编码。
    *
    * <p>辅助造词候选在候选栏里看到的 rawInput 往往只是当前前缀，删除确认和精确删除
@@ -942,6 +979,14 @@ Java_com_osfans_trime_core_Rime_getRimeUserPhraseCodeWithPrefix(
   std::string full_code =
       Rime::Instance().getUserPhraseCodeWithPrefix(raw_prefix, raw_text);
   return env->NewStringUTF(full_code.c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_osfans_trime_core_Rime_isRimeBaseDictionaryWord(JNIEnv *env,
+                                                         jclass /* thiz */,
+                                                         jstring text) {
+  std::string raw_text = CString(env, text);
+  return Rime::Instance().isBaseDictionaryWord(raw_text);
 }
 
 extern "C" JNIEXPORT jint JNICALL

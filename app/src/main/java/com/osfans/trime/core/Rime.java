@@ -738,6 +738,20 @@ public class Rime implements RimeApi, RimeLifecycleOwner {
     }
 
     /**
+     * 判断某词是否存在于当前方案的基础词库（primary table）。
+     *
+     * <p>通过 dict 编译期生成的 reverse db（词 -&gt; 编码）反向查询实现，用于区分
+     * “基础词库已有词”与“用户自造词”：基础词库词不应被标记为自造词。</p>
+     *
+     * @param text 候选词文本。
+     * @return true 表示该词来自基础词库。
+     */
+    public boolean isBaseDictionaryWord(String text) {
+        if (TextUtils.isEmpty(text)) return false;
+        return Boolean.TRUE.equals(withRimeContext(() -> isRimeBaseDictionaryWord(text)));
+    }
+
+    /**
      * 清除当前组字内容(取消输入)。
      */
     @Override
@@ -1332,6 +1346,14 @@ public class Rime implements RimeApi, RimeLifecycleOwner {
      * 按输入前缀和词语回查当前方案 user_dict 中保存的完整编码。
      */
     public static native String getRimeUserPhraseCodeWithPrefix(String prefix, String text);
+
+    /**
+     * 判断某词是否存在于当前方案的基础词库(原生方法)。
+     *
+     * @param text 候选词文本。
+     * @return true 表示该词来自基础词库。
+     */
+    public static native boolean isRimeBaseDictionaryWord(String text);
 
     /**
      * 获取光标位置(原生方法)。
