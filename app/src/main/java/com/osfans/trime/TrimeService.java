@@ -148,6 +148,8 @@ public class TrimeService extends InputMethodService {
     private String mPreferredRawInputCandidate = "";
     // 缓存「候选词是否在基础词库中」的 native 反查结果，key 为「方案 + 词」。
     private final Map<String, Boolean> mBaseDictionaryWordCache = new HashMap<>();
+    // 缓存「候选词是否命中 user_dict 前缀记录」的 native 反查结果，key 为「方案 + 前缀 + 词」。
+    private final Map<String, Boolean> mUserDictionaryWordCache = new HashMap<>();
     private enum CreateWordFocusField {
         CODE,
         TEXT,
@@ -2993,7 +2995,8 @@ public class TrimeService extends InputMethodService {
      * <p>判定分两步：</p>
      * <ol>
      *   <li>来源必须是用户词典：native 的 user_phrase/user_table 标记，命中手动/自动造词
-     *       登记表，或 Java 补出的 learned mixed completion。</li>
+     *       登记表，命中 user_dict 前缀反查（含电脑端同步来的词），或 Java 补出的
+     *       learned mixed completion。</li>
      *   <li>该词不能存在于基础词库（tigress/tigress_ci 等 primary table），否则属于学习到的
      *       词库词，不应标成自造词。</li>
      * </ol>
@@ -3007,7 +3010,8 @@ public class TrimeService extends InputMethodService {
         }
         boolean fromUserDictionary = item.isSelfCreated()
                 || isRememberedManualCreatedWord(rawInput, item)
-                || isRememberedAutoCreatedWord(item);
+                || isRememberedAutoCreatedWord(item)
+                || isUserDictionaryWordCached(rawInput, item);
         boolean shouldMarkSelfCreated = fromUserDictionary
                 && !isBaseDictionaryWordCached(stripPredictionPlaceholder(item.getText()));
         if (item.isSelfCreated() == shouldMarkSelfCreated) {
@@ -3016,6 +3020,38 @@ public class TrimeService extends InputMethodService {
         CandidateItem decorated = new CandidateItem(item.getText(), item.getRawComment(), shouldMarkSelfCreated);
         decorated.setIndex(item.getIndex());
         return decorated;
+    }
+
+    /**
+     * 带缓存地判断某候选是否命中当前方案 user_dict 中“编码以当前输入前缀开头”的记录。
+     *
+     * <p>电脑端造好并同步过来的词，本机没有手动/自动造词登记表记录，且 native 的
+     * user_phrase/user_table 标记往往只在打出全码时才置位。这里直接按“当前输入前缀 + 词语”
+     * 反查 user_dict，让这类候选在候选栏一出现（而非打出全码时）就补上小太极。</p>
+     *
+     * <p>基础词库已有词不算自造词，先经 {@link #isBaseDictionaryWordCached} 短路，
+     * 避免对普通候选也做昂贵的 user_dict 反查。</p>
+     */
+    private boolean isUserDictionaryWordCached(String rawInput, CandidateItem item) {
+        if (item == null || mRime == null) {
+            return false;
+        }
+        String code = stripPredictionPlaceholder(rawInput).trim();
+        String text = stripPredictionPlaceholder(item.getText()).trim();
+        if (TextUtils.isEmpty(code) || TextUtils.isEmpty(text) || isBaseDictionaryWordCached(text)) {
+            return false;
+        }
+        String key = getCurrentSchemaIdSafe() + '\0' + code + '\0' + text;
+        Boolean cached = mUserDictionaryWordCache.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        boolean inUserDictionary = mRime.hasUserPhraseWithPrefix(code, text);
+        if (mUserDictionaryWordCache.size() > 4096) {
+            mUserDictionaryWordCache.clear();
+        }
+        mUserDictionaryWordCache.put(key, inUserDictionary);
+        return inUserDictionary;
     }
 
     /**
